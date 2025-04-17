@@ -1,5 +1,5 @@
 import Hls from "hls.js";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 
 interface VideoPlayerProps {
   src: string;
@@ -59,3 +59,5 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ src }) => {
     />
   );
 };
+
+export default VideoPlayer;

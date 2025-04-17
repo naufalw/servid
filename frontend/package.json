@@ -1,10 +1,10 @@
 {
-  "name": "@servid-frontend",
+  "name": "@servid/frontend",
   "private": true,
   "sideEffects": false,
   "type": "module",
   "scripts": {
-    "dev": "vinxi dev",
+    "dev": "vinxi dev --host 0.0.0.0",
     "build": "vinxi build",
     "start": "vinxi start"
   },

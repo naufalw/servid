@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { FormEvent, useState } from "react";
+import VideoPlayer from "~/components/VideoPlayer";
 
 export const Route = createFileRoute("/")({
   component: Home,
@@ -8,9 +9,11 @@ export const Route = createFileRoute("/")({
 function Home() {
   const [message, setMessage] = useState<string>("");
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [streamUrl, setStreamUrl] = useState<string | null>(null);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setStreamUrl(null);
 
     setIsUploading(true);
 
@@ -30,7 +33,7 @@ function Home() {
 
     formData.append("video", file);
 
-    const backendUrl = "http://127.0.0.1:8080/upload";
+    const backendUrl = "http://192.168.0.96:8080/upload";
 
     try {
       const response = await fetch(backendUrl, {
@@ -41,6 +44,11 @@ function Home() {
       const result = await response.text();
 
       if (!response.ok) throw new Error("Error" + response.status + result);
+      const urlMatch = result.match(/Stream URL: (\/stream\/.*\.m3u8)/);
+      const relativeUrl = urlMatch![1];
+
+      const fullStreamUrl = `http://192.168.0.96:8080${relativeUrl}`;
+      setStreamUrl(fullStreamUrl);
 
       setMessage("upload good");
     } catch (e) {
@@ -48,6 +56,8 @@ function Home() {
       setMessage(
         "upload error " + (e instanceof Error ? e.message : String(e)),
       );
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -60,6 +70,13 @@ function Home() {
           {isUploading ? "uploading" : "upload"}
         </button>
         {message && <p>{message}</p>}
+
+        {streamUrl && (
+          <div>
+            <h2>Playback</h2>
+            <VideoPlayer src={streamUrl} />
+          </div>
+        )}
       </form>
     </div>
   );

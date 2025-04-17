@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/google/uuid"
@@ -39,6 +40,9 @@ func main() {
 
 	http.Handle("/ping", enableCors(http.HandlerFunc(pingHandler)))
 	http.Handle("/upload", enableCors(http.HandlerFunc(uploadHandler)))
+
+	hlsFileServer := http.FileServer(http.Dir(hlsPath))
+	http.Handle("/stream/", http.StripPrefix("/stream/", enableCors(hlsFileServer)))
 
 	port := "8080"
 	fmt.Printf("Starting server on port %s\n", port)
@@ -93,7 +97,47 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Uploaded file %s saved as %s\n", fileHeader.Filename, rawFilePath)
 
+	videoHlsPath := filepath.Join(hlsPath, videoID)
+
+	if err := os.MkdirAll(videoHlsPath, os.ModePerm); err != nil {
+		http.Error(w, "Cannot create hls dir", http.StatusInternalServerError)
+		return
+	}
+
+	outputPlaylist := filepath.Join(videoHlsPath, "playlist.m3u8")
+	segmentFilename := filepath.Join(videoHlsPath, "segment%03d.ts")
+
+	cmdArgs := []string{
+		"-i", rawFilePath, //Input
+		"-profile:v", "baseline",
+		"-level", "3.0",
+		"-start_number", "0",
+		"-hls_time", "10",
+		"-hls_list_size", "0",
+		"-f", "hls", // HLS format
+		"-hls_segment_filename", segmentFilename,
+		outputPlaylist, // the m3u8 go here
+	}
+
+	cmd := exec.Command("ffmpeg", cmdArgs...)
+
+	// Pipe ffmpeg to server logs
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	log.Printf("Starting ffmpeg encoding for %s", videoID)
+	err = cmd.Run()
+
+	if err != nil {
+		log.Printf("ffmpeg error for %s %v", videoID, err)
+		http.Error(w, "Encoding fail", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("ffmpeg success for %s", videoID)
+
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "File upload success, video id: %s", videoID)
+	streamUrl := fmt.Sprintf("/stream/%s/playlist.m3u8", videoID)
+	fmt.Fprintf(w, "File uploaded and encoded. Video ID: %s, Stream URL: %s", videoID, streamUrl)
 
 }
