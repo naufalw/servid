@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -104,40 +106,109 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	outputPlaylist := filepath.Join(videoHlsPath, "playlist.m3u8")
-	segmentFilename := filepath.Join(videoHlsPath, "segment%03d.ts")
+	masterPlaylistPath := filepath.Join(videoHlsPath, "master.m3u8")
 
-	cmdArgs := []string{
-		"-i", rawFilePath, //Input
-		"-profile:v", "baseline",
-		"-level", "3.0",
-		"-start_number", "0",
-		"-hls_time", "10",
-		"-hls_list_size", "0",
-		"-f", "hls", // HLS format
-		"-hls_segment_filename", segmentFilename,
-		outputPlaylist, // the m3u8 go here
+	variants := []struct {
+		w, h  string // width, height
+		vbit  string // video bitrate
+		abits string // audio bitrate
+	}{
+		{"640", "360", "800k", "96k"},
+		{"842", "480", "1400k", "128k"},
+		{"1280", "720", "2800k", "128k"},
+		{"1920", "1080", "5000k", "192k"},
 	}
 
-	cmd := exec.Command("ffmpeg", cmdArgs...)
+	// Make dir for the variants
+	for i := range variants {
+		dir := filepath.Join(videoHlsPath, fmt.Sprintf("v%d", i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			http.Error(w, "mkdir "+dir+": "+err.Error(), 500)
+			return
+		}
+	}
 
-	// Pipe ffmpeg to server logs
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// build filter
+	// split=4[v0in][v1in][v2in][v3in];
+	// [v0in]scale=640:360[v0out];
+	// [v1in]scale=842:480[v1out];
+	splitCount := len(variants)
+	inLabels := make([]string, splitCount)
+	outLabels := make([]string, splitCount)
+	for i := range splitCount {
+		inLabels[i] = fmt.Sprintf("[v%din]", i)
+		outLabels[i] = fmt.Sprintf("[v%dout]", i)
+	}
+	fcParts := []string{
+		fmt.Sprintf("[0:v]split=%d%s", splitCount, strings.Join(inLabels, "")),
+	}
+	for i, v := range variants {
+		fcParts = append(fcParts,
+			fmt.Sprintf("%sscale=%s:%s%s", inLabels[i], v.w, v.h, outLabels[i]),
+		)
+	}
+	filterComplex := strings.Join(fcParts, ";")
 
-	log.Printf("Starting ffmpeg encoding for %s", videoID)
-	err = cmd.Run()
+	// Base flags
+	ffmpegArgs := []string{
+		"-hide_banner", "-y",
+		"-i", rawFilePath,
+		"-filter_complex", filterComplex}
 
-	if err != nil {
-		log.Printf("ffmpeg error for %s %v", videoID, err)
-		http.Error(w, "Encoding fail", http.StatusInternalServerError)
+	// Map each scaled video + a copy of same audio
+	for i := range variants {
+		// video
+		ffmpegArgs = append(ffmpegArgs,
+			"-map", outLabels[i],
+			"-b:v:"+strconv.Itoa(i), variants[i].vbit,
+			"-c:v:"+strconv.Itoa(i), "libx264",
+			// audio
+			"-map", "0:a:0",
+			"-b:a:"+strconv.Itoa(i), variants[i].abits,
+			"-c:a:"+strconv.Itoa(i), "aac",
+		)
+	}
+
+	// muxxxx hls
+	segmentPattern :=
+		filepath.Join(videoHlsPath, "v%v", "segment%03d.ts")
+
+	streamMapLabels := make([]string, splitCount)
+	for i := 0; i < splitCount; i++ {
+		streamMapLabels[i] = fmt.Sprintf("v:%d,a:%d", i, i)
+	}
+
+	variantPlaylistPattern := filepath.Join(
+		videoHlsPath,
+		"v%v",           // substitute variant index (0,1,2…)
+		"playlist.m3u8", // constant name inside each vX/
+	)
+
+	ffmpegArgs = append(ffmpegArgs,
+		"-f", "hls",
+		"-hls_time", "6",
+		"-hls_playlist_type", "vod",
+		"-hls_list_size", "0",
+		"-hls_flags", "independent_segments",
+		"-hls_segment_filename", segmentPattern,
+		"-master_pl_name", filepath.Base(masterPlaylistPath),
+		"-var_stream_map", strings.Join(streamMapLabels, " "),
+		variantPlaylistPattern, // writes the playlist.m3u8
+	)
+
+	cmd := exec.Command("ffmpeg", ffmpegArgs...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	log.Println("ffmpeg args:", cmd.Args)
+	if err := cmd.Run(); err != nil {
+		log.Println("ffmpeg failed:", err)
+		http.Error(w, "encoding failed", 500)
 		return
 	}
 
 	log.Printf("ffmpeg success for %s", videoID)
 
 	w.WriteHeader(http.StatusOK)
-	streamUrl := fmt.Sprintf("/stream/%s/playlist.m3u8", videoID)
+	streamUrl := fmt.Sprintf("/stream/%s/master.m3u8", videoID)
 	fmt.Fprintf(w, "File uploaded and encoded. Video ID: %s, Stream URL: %s", videoID, streamUrl)
 
 }

@@ -9,7 +9,9 @@ export const Route = createFileRoute("/")({
 function Home() {
   const [message, setMessage] = useState<string>("");
   const [isUploading, setIsUploading] = useState<boolean>(false);
-  const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  const [streamUrl, setStreamUrl] = useState<string | null>(
+    "http://192.168.0.96:8080/stream/78f3a72c-f112-47c0-9308-9c7b3c699734/master.m3u8",
+  );
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
